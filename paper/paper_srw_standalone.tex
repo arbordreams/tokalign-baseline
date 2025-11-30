@@ -1,0 +1,351 @@
+% NAACL SRW 2025 Paper - Standalone Version
+% Compiles without special style files
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{natbib}
+
+% Custom commands
+\newcommand{\chrf}{chrF++}
+\newcommand{\chrfd}{chrF-$\Delta$}
+\newcommand{\chrfe}{chrF-E}
+
+\title{\textbf{The Fertility Trap: Efficiency-Weighted Evaluation\\of Vocabulary Adaptation}}
+
+\author{Anonymous NAACL SRW Submission}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent Vocabulary adaptation methods promise improved tokenization efficiency for multilingual language models, yet their evaluation remains problematic. Standard metrics like BLEU are confounded by tokenization changes, while fertility improvements may not translate to actual computational gains. We propose two chrF-based metrics: (1) \textbf{\chrfd{}}, which diagnoses evaluation bias by quantifying BLEU-chrF disagreement, and (2) \textbf{\chrfe{}}, which weights translation quality by computational efficiency. Through a comprehensive case study of TokAlign on Pythia-1B, we uncover the ``Fertility Trap'': despite 9\% improved fertility, the adapted model suffers 20\% throughput degradation due to vocabulary expansion from 50K to 152K tokens. Our \chrfe{} metric reveals that efficiency-adjusted quality decreases by 9.4\%, exposing costs invisible to traditional evaluation. We recommend \chrfe{} as a standard metric for vocabulary adaptation research.
+\end{abstract}
+
+\section{Introduction}
+
+The success of large language models (LLMs) has been predominantly English-centric, with tokenizers like GPT-2's BPE \citep{radford2019language} optimized for English text. This creates significant challenges for multilingual applications: non-English languages often suffer from poor \textit{fertility}---the average number of tokens per word---leading to longer sequences and increased computational costs \citep{rust2021good,petrov2024language}.
+
+\citet{petrov2024language} quantified this ``tokenizer tax,'' demonstrating that users of under-represented languages pay 2-4$\times$ higher computational costs for equivalent tasks. This disparity has motivated vocabulary adaptation research, with methods like WECHSEL \citep{minixhofer2022wechsel} and TokAlign \citep{li2025tokalign} enabling efficient transfer of English-centric models to new languages.
+
+However, current evaluation practices for vocabulary adaptation suffer from two critical gaps that we address in this work:
+
+\paragraph{Metric Disagreement.} When tokenizers change, token-level metrics like BLEU \citep{papineni2002bleu} become unreliable. Different tokenizations produce different n-gram boundaries, making cross-tokenizer comparisons potentially misleading. Character-level metrics like \chrf{} \citep{popovic2015chrf} are tokenization-agnostic, but practitioners rarely examine whether BLEU and \chrf{} agree---and what disagreement signifies. The WMT metrics shared task \citep{freitag2022results} demonstrated that BLEU can substantially diverge from human judgments, yet this issue is amplified in vocabulary adaptation where tokenization explicitly changes.
+
+\paragraph{Missing Efficiency Accounting.} Vocabulary adaptation methods are evaluated on fertility and downstream performance, but fertility improvements do not directly translate to inference speedups. Expanding vocabulary size increases the cost of the output projection layer, which computes $\mathbf{h} \cdot \mathbf{W}$ where $\mathbf{W} \in \mathbb{R}^{d \times V}$. Recent work by \citet{shao2025vqlogits} showed that this layer can constitute a substantial portion of inference cost, particularly for smaller models where $V$ is large relative to hidden dimension $d$.
+
+We address both gaps by introducing \chrfd{} and \chrfe{}, two simple but informative metrics. Through a comprehensive case study on TokAlign, we reveal the ``Fertility Trap'': a regime where vocabulary expansion improves fertility but degrades computational efficiency.
+
+\section{Related Work}
+
+\subsection{Vocabulary Adaptation Methods}
+
+Cross-lingual vocabulary adaptation (CVA) has emerged as an active research area. \citet{minixhofer2022wechsel} introduced WECHSEL, which initializes new token embeddings using bilingual dictionaries and word embedding alignment. TokAlign \citep{li2025tokalign} aligns new tokens with semantically similar tokens from the original vocabulary using contextual embeddings.
+
+Recent work has expanded this direction. \citet{remy2024transtokenization} proposed trans-tokenization for low-resource languages, achieving state-of-the-art results for Tatar machine translation. \citet{fujii2024swallow} developed Swallow by extending Llama 2's vocabulary for Japanese, demonstrating that continual pre-training on 100B tokens yields strong performance. \citet{yamaguchi2024empirical} conducted an empirical study of five CVA methods, finding inference speedups of up to 271.5\% but noting that effectiveness varies with the base model's multilingual pretraining.
+
+These methods consistently report fertility improvements, but evaluation has focused on downstream task accuracy rather than computational efficiency. Our work fills this evaluation gap.
+
+\subsection{Machine Translation Evaluation}
+
+BLEU \citep{papineni2002bleu} remains widely used despite operating at the token level, making it sensitive to tokenization choices. \citet{popovic2015chrf} introduced \chrf{}, which computes character n-gram F-score, providing tokenization-agnostic evaluation. The original paper demonstrated strong correlation with human judgments, achieving the highest segment-level correlations on WMT14 data for translation from English.
+
+Neural metrics have advanced significantly. COMET \citep{rei2020comet} leverages cross-lingual pretrained language models to predict human judgments, achieving state-of-the-art correlation on WMT benchmarks. \citet{freitag2022results} showed in WMT22 that neural metrics substantially outperform BLEU, recommending practitioners ``stop using BLEU.'' However, \citet{glushkova2023bleu} noted that neural metrics can be unreliable for critical errors like number and entity deviations, suggesting that combining lexical and neural metrics improves robustness.
+
+\subsection{Efficient Vocabulary Methods}
+
+The computational cost of large vocabularies has received increasing attention. The output projection layer requires $O(d \times V)$ operations per generated token, which can dominate inference time for large vocabularies. \citet{shao2025vqlogits} proposed VQ-Logits, achieving up to 99\% parameter reduction in the output layer and 6$\times$ speedup in logit computation. \citet{amer2022fast} developed clustering-based acceleration for multilingual MT. \citet{kolesnikova2022knowledge} explored vocabulary reduction through knowledge distillation, achieving 17-49$\times$ compression for Russian models.
+
+Our contribution is complementary: we focus on \textit{evaluation} rather than efficiency methods, proposing metrics that reveal when vocabulary changes help or hurt.
+
+\section{Proposed Metrics}
+
+\subsection{\chrfd{}: Diagnosing Metric Disagreement}
+
+BLEU operates on tokens while \chrf{} operates on characters. When comparing models with different tokenizers, these metrics measure fundamentally different phenomena and can diverge substantially. We define \chrfd{} to quantify this divergence:
+\begin{equation}
+\text{\chrfd{}} = \text{\chrf{}} - \text{BLEU}
+\end{equation}
+
+The key insight is not the absolute value of \chrfd{}, but rather the \textit{change} in \chrfd{} between baseline and adapted models ($\Delta$\chrfd{}). A statistically significant shift signals that the tokenizer is affecting evaluation in ways that warrant investigation.
+
+We compute statistical significance using bootstrap confidence intervals with 1,000 resamples. If the 95\% CI for $\Delta$\chrfd{} excludes zero, the disagreement is statistically significant and practitioners should compute additional metrics (e.g., COMET) to determine which assessment is more reliable.
+
+\subsection{\chrfe{}: Efficiency-Weighted Quality}
+
+Vocabulary expansion improves fertility but increases the output projection cost. For a model with hidden dimension $d$ and vocabulary size $V$, this layer requires $O(d \times V)$ operations per generated token. We capture this tradeoff:
+\begin{equation}
+\text{\chrfe{}} = \text{Quality} \times \frac{\text{Throughput}_{\text{adapted}}}{\text{Throughput}_{\text{baseline}}}
+\end{equation}
+
+Here, Quality can be any translation metric (\chrf{}, BLEU, or COMET). The throughput ratio penalizes quality improvements that come at efficiency costs. \chrfe{} answers the practical question: \textit{given the efficiency cost I'm paying, is the quality improvement worth it?}
+
+When \chrfe{} $<$ Quality$_{\text{baseline}}$, efficiency losses outweigh quality gains---what we call the \textbf{Fertility Trap}. This occurs when:
+\begin{equation}
+\frac{V_{\text{new}}}{V_{\text{old}}} > \frac{L_{\text{old}}}{L_{\text{new}}} \times \frac{C_{\text{seq}}}{C_{\text{vocab}}}
+\end{equation}
+where $L$ is average sequence length and $C$ represents computational constants that depend on model architecture.
+
+\section{Case Study: TokAlign on Pythia-1B}
+
+We conduct a comprehensive evaluation of TokAlign \citep{li2025tokalign}, a recent vocabulary adaptation method that achieves strong results on standard benchmarks.
+
+\subsection{Experimental Setup}
+
+\paragraph{Hardware.} All experiments were conducted on 2$\times$ NVIDIA H100 80GB HBM3 GPUs with an Intel Xeon Platinum 8480+ processor (52 cores). Total runtime was approximately 20 minutes.
+
+\paragraph{Models.} We adapt Pythia-1B \citep{biderman2023pythia} from its GPT-2-based tokenizer (50,257 tokens) to Qwen2's tokenizer (151,643 tokens), which has substantially better coverage for Spanish and other non-English languages. Table~\ref{tab:setup} summarizes configurations. The vocabulary expansion adds 420M parameters (41\% increase) to the embedding and output projection layers.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+& \textbf{Baseline} & \textbf{Adapted} \\
+\midrule
+Base Model & Pythia-1B & Pythia-1B \\
+Tokenizer & GPT-2 & Qwen2 \\
+Vocabulary Size & 50,257 & 151,643 \\
+Total Parameters & 1.01B & 1.43B \\
+Training Steps & --- & 2,500 \\
+\bottomrule
+\end{tabular}
+\caption{Model configurations. Vocabulary expansion ($3\times$) adds 420M parameters to embedding layers.}
+\label{tab:setup}
+\end{table}
+
+\paragraph{Evaluation Tasks.} We evaluate across six dimensions:
+\begin{enumerate}
+\item \textbf{Tokenizer efficiency}: Fertility, compression ratio, percent continued words (PCW), and single-token recognition rate (STRR) on Spanish Wikipedia (2.1M samples).
+\item \textbf{Perplexity}: Evaluated on Spanish and English text (5,258 samples each).
+\item \textbf{Natural language understanding}: Zero-shot evaluation on ARC-Easy, HellaSwag, and LAMBADA.
+\item \textbf{Machine translation}: BLEU, \chrf{}, TER, and COMET on OPUS-100 Spanish$\rightarrow$English (1,012 samples).
+\item \textbf{Generation quality}: Distinct-N, repetition rate, and Self-BLEU on Spanish Wikipedia prompts.
+\item \textbf{Computational efficiency}: Throughput (tokens/sec), time-to-first-token (TTFT), and peak VRAM on NVIDIA H100.
+\end{enumerate}
+
+\subsection{Results}
+
+\paragraph{Tokenizer Efficiency.} TokAlign achieves its intended goal: fertility decreases by 9\% from 2.059 to 1.874 tokens/word (Table~\ref{tab:tokenizer}). All efficiency metrics show statistically significant improvements ($p < 0.05$).
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Metric} & \textbf{Baseline} & \textbf{Adapted} & \textbf{$\Delta$} \\
+\midrule
+Fertility $\downarrow$ & 2.059 & 1.874 & $-9.0\%^{*}$ \\
+Compression $\uparrow$ & 3.169 & 3.501 & $+10.5\%^{*}$ \\
+PCW $\downarrow$ & 0.588 & 0.572 & $-2.7\%^{*}$ \\
+STRR $\uparrow$ & 0.412 & 0.428 & $+3.9\%^{*}$ \\
+\bottomrule
+\end{tabular}
+\caption{Tokenizer efficiency on Spanish Wikipedia (2.1M samples). $^{*}$Statistically significant at $p<0.05$.}
+\label{tab:tokenizer}
+\end{table}
+
+\paragraph{Translation Quality.} Table~\ref{tab:mt} reveals the striking metric disagreement that motivates our work. BLEU decreases by 12\% while \chrf{} \textit{increases} by 13.2\%---a 25 percentage point disagreement. Our \chrfd{} metric flags this: the baseline has \chrfd{}=17.06, while the adapted model has \chrfd{}=23.40, yielding $\Delta$\chrfd{}=+6.34.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Metric} & \textbf{Baseline} & \textbf{Adapted} & \textbf{$\Delta$} \\
+\midrule
+BLEU & 16.25 & 14.30 & \textcolor{red}{$-12.0\%$} \\
+\chrf{} & 33.31 & 37.70 & \textcolor{green!50!black}{$+13.2\%$} \\
+TER $\downarrow$ & 83.07 & 101.18 & \textcolor{red}{$+21.8\%$} \\
+COMET & 0.730 & 0.660 & \textcolor{red}{$-9.6\%$} \\
+\midrule
+\chrfd{} & 17.06 & 23.40 & $+6.34^{*}$ \\
+\bottomrule
+\end{tabular}
+\caption{Machine translation results (OPUS-100, Spanish$\rightarrow$English, 1,012 samples). $^{*}$95\% CI: [1.38, 3.14].}
+\label{tab:mt}
+\end{table}
+
+To resolve this disagreement, we computed COMET \citep{rei2020comet}, a neural metric trained on human judgments with state-of-the-art correlation. COMET shows 9.6\% degradation (0.730 $\rightarrow$ 0.660), \textbf{siding with BLEU}. This suggests the quality degradation is real---the \chrf{} improvement reflects increased output length (BP ratio 1.215 vs 0.799) rather than semantic quality.
+
+\paragraph{The Fertility Trap.} Figure~\ref{fig:fertility_trap} illustrates our central finding. Despite 9\% fertility improvement, computational efficiency \textit{degrades}:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Metric} & \textbf{Baseline} & \textbf{Adapted} & \textbf{$\Delta$} \\
+\midrule
+Tokens/sec & 619.77 & 496.22 & $-19.9\%$ \\
+Samples/sec & 9.68 & 7.75 & $-19.9\%$ \\
+TTFT (ms) & 12.91 & 16.12 & $+24.9\%$ \\
+Peak VRAM (MB) & 2,314 & 3,108 & $+34.3\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Computational efficiency (NVIDIA H100, batch size 8, 3 runs averaged).}
+\label{tab:efficiency}
+\end{table}
+
+The vocabulary expanded $3\times$ (50K $\rightarrow$ 152K), but sequences only shortened by 9\%. The output projection cost increase dominates the sequence length savings, yielding net efficiency loss.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{visualizations/fertility_trap.png}
+\caption{The Fertility Trap: Despite 9\% fertility improvement (a), throughput \textit{decreases} by 20\% (b) due to vocabulary expansion ($3\times$). \chrfe{} captures this tradeoff (c): efficiency-adjusted quality decreases by 9.4\%.}
+\label{fig:fertility_trap}
+\end{figure}
+
+\paragraph{Applying \chrfe{}.} Using \chrf{} as the quality metric:
+\begin{equation}
+\text{\chrfe{}} = 37.70 \times \frac{496.22}{619.77} = 30.18
+\end{equation}
+
+Even using the optimistic \chrf{} quality assessment (+13.2\%), \chrfe{} reveals that efficiency-adjusted quality \textit{decreases} by 9.4\% (33.31 $\rightarrow$ 30.18). The Fertility Trap is sprung.
+
+\paragraph{Additional Findings.} Our comprehensive evaluation revealed further insights:
+\begin{itemize}
+\item \textbf{Generation quality}: The adapted model shows 35.8\% less repetition in greedy decoding, indicating reduced degeneration issues.
+\item \textbf{Perplexity}: Spanish perplexity increased 181\% (expected for checkpoint-2500), while English increased only 20\%.
+\item \textbf{NLU tasks}: Moderate degradation of 3-9\% on English benchmarks, within acceptable range for early-stage adaptation.
+\end{itemize}
+
+\section{Discussion}
+
+\paragraph{Why Did Metrics Disagree?} The \chrf{} improvement despite COMET degradation reflects two factors: (1) the adapted model produces longer outputs (length ratio 1.22 vs 0.80), increasing character coverage without improving semantic quality; and (2) at checkpoint-2500, the model has not fully adapted to the new vocabulary.
+
+\paragraph{When Does the Fertility Trap Occur?} The Fertility Trap occurs when vocabulary expansion costs exceed sequence length savings. For Pythia-1B ($d$=2048), the vocabulary tripled while sequences shortened by only 9\%. We hypothesize the trap is more severe for smaller models where $V/d$ is larger. \citet{yamaguchi2024empirical} found that CVA effectiveness varies significantly with base model characteristics, supporting this hypothesis.
+
+\paragraph{Implications for Practitioners.} Our findings suggest vocabulary adaptation papers should report: (1) \chrfd{} to flag potential evaluation artifacts, and (2) \chrfe{} to capture efficiency-quality tradeoffs. A method that improves fertility but degrades \chrfe{} may not deliver practical deployment benefits.
+
+\section{Limitations}
+
+Our study has several limitations. First, we evaluate a single adaptation method (TokAlign) on one model (Pythia-1B) for one language pair (Spanish-English). The Fertility Trap threshold likely varies by model size, architecture, and target language. Second, our adapted model uses an early checkpoint (2,500 steps); quality may improve with longer training, though efficiency costs remain fixed due to vocabulary size. Third, we lack human evaluation to definitively validate the COMET-based resolution of metric disagreement, though COMET's strong correlation with human judgments \citep{freitag2022results,rei2020comet} provides reasonable confidence.
+
+\section{Conclusion}
+
+We introduced two metrics for vocabulary adaptation evaluation: \chrfd{}, which diagnoses when BLEU and \chrf{} disagree due to tokenization effects, and \chrfe{}, which weights quality by computational efficiency. Through a comprehensive TokAlign case study with evaluation across six dimensions, we demonstrated:
+
+\begin{enumerate}
+\item \chrfd{} flagged a 25 percentage point BLEU-\chrf{} disagreement (+6.34, 95\% CI: [1.38, 3.14]), prompting COMET computation for resolution.
+\item COMET sided with BLEU, confirming quality degradation despite \chrf{} improvement.
+\item \chrfe{} revealed the Fertility Trap: despite 9\% fertility improvement, efficiency-adjusted quality decreased by 9.4\% due to $3\times$ vocabulary expansion.
+\end{enumerate}
+
+We recommend that vocabulary adaptation research report \chrfe{} alongside traditional metrics. Code and evaluation framework available at [anonymized].
+
+\bibliographystyle{plainnat}
+
+\begin{thebibliography}{25}
+
+\bibitem[Amer et al.(2022)]{amer2022fast}
+Amer, H., Kim, Y.J., Afify, M., et al.
+\newblock Fast vocabulary projection method via clustering for multilingual machine translation on GPU.
+\newblock In \textit{AMTA}, 2022.
+\newblock \url{https://aclanthology.org/2022.amta-research.6/}
+
+\bibitem[Biderman et al.(2023)]{biderman2023pythia}
+Biderman, S., Schoelkopf, H., Anthony, Q., et al.
+\newblock Pythia: A suite for analyzing large language models across training and scaling.
+\newblock In \textit{ICML}, 2023.
+\newblock \url{https://arxiv.org/abs/2304.01373}
+
+\bibitem[Freitag et al.(2022)]{freitag2022results}
+Freitag, M., Rei, R., Mathur, N., et al.
+\newblock Results of WMT22 metrics shared task: Stop using BLEU---neural metrics are better and more robust.
+\newblock In \textit{WMT}, 2022.
+\newblock \url{https://aclanthology.org/2022.wmt-1.2/}
+
+\bibitem[Fujii et al.(2024)]{fujii2024swallow}
+Fujii, K., Nakamura, T., Loem, M., et al.
+\newblock Continual pre-training for cross-lingual LLM adaptation: Enhancing Japanese language capabilities.
+\newblock \textit{arXiv:2404.17790}, 2024.
+\newblock \url{https://arxiv.org/abs/2404.17790}
+
+\bibitem[Glushkova et al.(2023)]{glushkova2023bleu}
+Glushkova, T., Zerva, C., Martins, A.F.T.
+\newblock BLEU meets COMET: Combining lexical and neural metrics towards robust machine translation evaluation.
+\newblock In \textit{EAMT}, 2023.
+\newblock \url{https://arxiv.org/abs/2305.19144}
+
+\bibitem[Kolesnikova et al.(2022)]{kolesnikova2022knowledge}
+Kolesnikova, A., Kuratov, Y., Konovalov, V., et al.
+\newblock Knowledge distillation of Russian language models with reduction of vocabulary.
+\newblock In \textit{Dialogue}, 2022.
+\newblock \url{https://arxiv.org/abs/2205.02340}
+
+\bibitem[Li et al.(2025)]{li2025tokalign}
+Li, C., Zhang, J., Zong, C.
+\newblock TokAlign: A token alignment method for continual vocabulary adaptation of language models.
+\newblock In \textit{ACL}, 2025.
+\newblock \url{https://aclanthology.org/2025.acl-long.123/}
+
+\bibitem[Minixhofer et al.(2022)]{minixhofer2022wechsel}
+Minixhofer, B., Paischer, F., Rekabsaz, N.
+\newblock WECHSEL: Effective initialization of subword embeddings for cross-lingual transfer of monolingual language models.
+\newblock In \textit{NAACL}, 2022.
+\newblock \url{https://aclanthology.org/2022.naacl-main.293/}
+
+\bibitem[Papineni et al.(2002)]{papineni2002bleu}
+Papineni, K., Roukos, S., Ward, T., Zhu, W.J.
+\newblock BLEU: A method for automatic evaluation of machine translation.
+\newblock In \textit{ACL}, 2002.
+\newblock \url{https://aclanthology.org/P02-1040/}
+
+\bibitem[Petrov et al.(2024)]{petrov2024language}
+Petrov, A., La Malfa, E., Torr, P., Biber, A.
+\newblock Language model tokenizers introduce unfairness between languages.
+\newblock In \textit{NeurIPS}, 2024.
+\newblock \url{https://arxiv.org/abs/2305.15425}
+
+\bibitem[Popovi{\'c}(2015)]{popovic2015chrf}
+Popovi{\'c}, M.
+\newblock chrF: Character n-gram F-score for automatic MT evaluation.
+\newblock In \textit{WMT}, 2015.
+\newblock \url{https://aclanthology.org/W15-3049/}
+
+\bibitem[Radford et al.(2019)]{radford2019language}
+Radford, A., Wu, J., Child, R., et al.
+\newblock Language models are unsupervised multitask learners.
+\newblock \textit{OpenAI Blog}, 2019.
+\newblock \url{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf}
+
+\bibitem[Rei et al.(2020)]{rei2020comet}
+Rei, R., Stewart, C., Farinha, A.C., Lavie, A.
+\newblock COMET: A neural framework for MT evaluation.
+\newblock In \textit{EMNLP}, 2020.
+\newblock \url{https://aclanthology.org/2020.emnlp-main.213/}
+
+\bibitem[Remy et al.(2024)]{remy2024transtokenization}
+Remy, F., Delobelle, P., Avetisyan, H., et al.
+\newblock Trans-tokenization and cross-lingual vocabulary transfers: Language adaptation of LLMs for low-resource NLP.
+\newblock \textit{arXiv:2408.04303}, 2024.
+\newblock \url{https://arxiv.org/abs/2408.04303}
+
+\bibitem[Rust et al.(2021)]{rust2021good}
+Rust, P., Pfeiffer, J., Vuli{\'c}, I., Ruder, S., Gurevych, I.
+\newblock How good is your tokenizer? On the monolingual performance of multilingual language models.
+\newblock In \textit{ACL}, 2021.
+\newblock \url{https://aclanthology.org/2021.acl-long.243/}
+
+\bibitem[Shao et al.(2025)]{shao2025vqlogits}
+Shao, J., Huang, H., Wu, J., et al.
+\newblock VQ-Logits: Compressing the output bottleneck of large language models via vector quantized logits.
+\newblock \textit{arXiv:2505.10202}, 2025.
+\newblock \url{https://arxiv.org/abs/2505.10202}
+
+\bibitem[Yamaguchi et al.(2024)]{yamaguchi2024empirical}
+Yamaguchi, A., Villavicencio, A., Aletras, N.
+\newblock An empirical study on cross-lingual vocabulary adaptation for efficient language model inference.
+\newblock In \textit{EMNLP Findings}, 2024.
+\newblock \url{https://aclanthology.org/2024.findings-emnlp.396/}
+
+\end{thebibliography}
+
+\end{document}

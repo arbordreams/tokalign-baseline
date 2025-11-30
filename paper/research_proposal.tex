@@ -1,0 +1,473 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{geometry}
+\usepackage{tcolorbox}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{pifont}  % For checkmarks and crosses
+
+\geometry{margin=1in}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+\title{\textbf{Beyond BLEU: chrF-Based Metrics for Evaluating Vocabulary Adaptation}\\[0.5em]
+\large A TokAlign Case Study}
+
+\author{
+    Research Proposal\\
+    \textit{Target Venue: Workshop on Evaluation \& Comparison of NLP Systems (Eval4NLP)}\\
+    \textit{or WMT Metrics Shared Task}
+}
+
+\date{November 2025}
+
+\begin{document}
+
+\maketitle
+
+%==============================================================================
+\begin{abstract}
+Vocabulary adaptation methods are typically evaluated using BLEU and fertility metrics, but these are confounded by tokenization differences. We introduce two chrF-based metrics: (1) \textbf{chrF-$\Delta$}, which diagnoses tokenization-induced evaluation bias by measuring BLEU-chrF disagreement, and (2) \textbf{chrF-E}, which weights translation quality by computational efficiency. Through a detailed case study of TokAlign---a recent vocabulary adaptation method---we demonstrate that while adaptation improves chrF++ by 13\%, chrF-$\Delta$ reveals this improvement is partially masked by BLEU's tokenization sensitivity (+6.34 point shift), and chrF-E shows the net efficiency-adjusted quality actually \textit{decreases} by 9\% due to vocabulary expansion costs. Our findings suggest that chrF-based metrics provide more reliable evaluation for vocabulary adaptation research.
+\end{abstract}
+
+%==============================================================================
+\section{Introduction and Motivation}
+
+Vocabulary adaptation has emerged as a critical technique for extending large language models (LLMs) to new languages and domains \citep{minixhofer2022wechsel, minixhofer2024zett}. Methods such as TokAlign \citep{li2025tokalign}, WECHSEL, and vocabulary expansion techniques promise improved tokenization efficiency through reduced \textit{fertility}---the average number of tokens per word.
+
+However, a fundamental problem plagues the evaluation of these methods: \textbf{the metrics used to evaluate vocabulary adaptation are themselves sensitive to tokenization choices}. Consider the following scenario:
+
+\begin{tcolorbox}[colback=gray!10, colframe=gray!50, title=The Evaluation Paradox]
+\textbf{Model A} (baseline tokenizer): Produces translation $T_A$\\
+\textbf{Model B} (adapted tokenizer): Produces translation $T_B$\\[0.5em]
+If $T_A \approx T_B$ semantically, but tokenized differently, BLEU may report significantly different scores---not because translation quality differs, but because \textit{token boundaries differ}.
+\end{tcolorbox}
+
+This creates a paradox: we use metrics like BLEU to evaluate whether vocabulary adaptation improves translation, but BLEU scores are confounded by the very tokenization changes we are evaluating.
+
+\subsection{Research Questions}
+
+This work addresses three key research questions:
+
+\begin{enumerate}
+    \item \textbf{RQ1:} To what extent does vocabulary adaptation introduce evaluation bias in token-level metrics like BLEU?
+    \item \textbf{RQ2:} Can character-level metrics like chrF++ provide tokenization-agnostic evaluation of vocabulary adaptation?
+    \item \textbf{RQ3:} How should we account for computational efficiency when evaluating vocabulary adaptation methods?
+\end{enumerate}
+
+%==============================================================================
+\section{Background}
+
+\subsection{Vocabulary Adaptation Methods}
+
+Vocabulary adaptation encompasses techniques that modify a pre-trained model's tokenizer and associated embeddings to improve performance on target languages or domains. Key approaches include:
+
+\begin{itemize}
+    \item \textbf{Vocabulary Expansion}: Adding new tokens to the existing vocabulary \citep{wang2020extending}
+    \item \textbf{Vocabulary Replacement}: Replacing the tokenizer entirely with a target-language tokenizer \citep{minixhofer2022wechsel}
+    \item \textbf{Token Alignment}: Learning mappings between source and target vocabularies \citep{li2025tokalign}
+\end{itemize}
+
+\subsection{Current Evaluation Metrics}
+
+\subsubsection{Token-Level Metrics}
+
+\textbf{BLEU} \citep{papineni2002bleu} computes n-gram precision between hypothesis and reference:
+\begin{equation}
+    \text{BLEU} = \text{BP} \cdot \exp\left(\sum_{n=1}^{N} w_n \log p_n\right)
+\end{equation}
+where $p_n$ is the modified n-gram precision and BP is the brevity penalty.
+
+\textbf{Problem}: BLEU operates on tokens, so different tokenizations of identical strings yield different scores.
+
+\subsubsection{Character-Level Metrics}
+
+\textbf{chrF/chrF++} \citep{popovic2015chrf} computes character n-gram F-score:
+\begin{equation}
+    \text{chrF} = \frac{(1 + \beta^2) \cdot \text{chrP} \cdot \text{chrR}}{\beta^2 \cdot \text{chrP} + \text{chrR}}
+\end{equation}
+where chrP and chrR are character n-gram precision and recall.
+
+\textbf{Advantage}: chrF++ is \textit{tokenization-agnostic}---it operates on raw characters, independent of subword boundaries.
+
+\subsubsection{Fertility Metrics}
+
+Fertility measures tokenization efficiency:
+\begin{equation}
+    \text{Fertility} = \frac{\text{Number of tokens}}{\text{Number of words}}
+\end{equation}
+
+Lower fertility indicates more efficient tokenization, but \textbf{does not account for computational cost} of larger vocabularies.
+
+\subsection{The Gap: Tokenization-Confounded Evaluation}
+
+Despite the widespread use of these metrics, no prior work has:
+\begin{enumerate}
+    \item Systematically quantified how vocabulary changes affect BLEU vs. chrF++ scores
+    \item Proposed metrics to diagnose tokenization-induced evaluation bias
+    \item Integrated efficiency considerations into translation quality metrics
+\end{enumerate}
+
+%==============================================================================
+\section{Proposed Metrics}
+
+We propose two novel chrF-based metrics designed specifically for vocabulary adaptation evaluation.
+
+\subsection{chrF-$\Delta$: Tokenization Bias Diagnostic}
+
+\begin{tcolorbox}[colback=blue!5, colframe=blue!50, title=Definition: chrF-$\Delta$]
+\textbf{chrF-$\Delta$} measures the disagreement between token-level (BLEU) and character-level (chrF++) evaluation:
+\begin{equation}
+    \text{chrF-}\Delta = \text{chrF++} - \text{BLEU}_{\text{norm}}
+\end{equation}
+where $\text{BLEU}_{\text{norm}} = \text{BLEU} \times \frac{100}{\max(\text{BLEU})}$ scales BLEU to [0, 100].
+\end{tcolorbox}
+
+\textbf{Interpretation}:
+\begin{itemize}
+    \item \textbf{Stable chrF-$\Delta$}: Token and character metrics agree; tokenization has minimal effect
+    \item \textbf{Increasing chrF-$\Delta$}: chrF++ improves more than BLEU; BLEU is penalizing tokenization changes
+    \item \textbf{Decreasing chrF-$\Delta$}: BLEU improves more than chrF++; tokenization aligns better with references
+\end{itemize}
+
+\textbf{Use Case}: When comparing models with different tokenizers, a large \textit{change} in chrF-$\Delta$ ($\Delta$chrF-$\Delta$) indicates the tokenizer is affecting BLEU beyond translation quality:
+
+\begin{equation}
+    \Delta\text{chrF-}\Delta = \text{chrF-}\Delta_{\text{adapted}} - \text{chrF-}\Delta_{\text{baseline}}
+\end{equation}
+
+\subsection{chrF-E: Efficiency-Weighted Quality}
+
+\begin{tcolorbox}[colback=green!5, colframe=green!50, title=Definition: chrF-E]
+\textbf{chrF-E} (Efficiency-weighted chrF) normalizes translation quality by computational cost:
+\begin{equation}
+    \text{chrF-E} = \text{chrF++} \times \frac{\text{Throughput}_{\text{model}}}{\text{Throughput}_{\text{baseline}}}
+\end{equation}
+Alternatively, using latency:
+\begin{equation}
+    \text{chrF-E} = \frac{\text{chrF++}}{\text{Latency}_{\text{normalized}}}
+\end{equation}
+\end{tcolorbox}
+
+\textbf{Motivation}: Vocabulary expansion can improve fertility (fewer tokens) but increase inference cost due to larger embedding matrices. chrF-E captures whether quality improvements justify efficiency costs.
+
+\textbf{Interpretation}:
+\begin{itemize}
+    \item $\text{chrF-E} > \text{chrF++}_{\text{baseline}}$: Quality-per-compute improved
+    \item $\text{chrF-E} < \text{chrF++}_{\text{baseline}}$: Quality improved but at disproportionate cost (the \textit{Fertility Trap})
+\end{itemize}
+
+\subsection{Properties of Proposed Metrics}
+
+\begin{table}[h]
+\centering
+\caption{Comparison of Evaluation Metrics for Vocabulary Adaptation}
+\label{tab:metric_comparison}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Metric} & \textbf{Tokenization-Agnostic} & \textbf{Efficiency-Aware} & \textbf{Diagnostic} \\
+\midrule
+BLEU & \textcolor{red}{\ding{55}} & \textcolor{red}{\ding{55}} & \textcolor{red}{\ding{55}} \\
+chrF++ & \textcolor{green}{\ding{51}} & \textcolor{red}{\ding{55}} & \textcolor{red}{\ding{55}} \\
+Fertility & \textcolor{green}{\ding{51}} & Partial & \textcolor{red}{\ding{55}} \\
+\midrule
+chrF-$\Delta$ (ours) & \textcolor{green}{\ding{51}} & \textcolor{red}{\ding{55}} & \textcolor{green}{\ding{51}} \\
+chrF-E (ours) & \textcolor{green}{\ding{51}} & \textcolor{green}{\ding{51}} & \textcolor{red}{\ding{55}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%==============================================================================
+\section{Preliminary Results: TokAlign Case Study}
+
+We present results using TokAlign \citep{li2025tokalign} for vocabulary adaptation of Pythia-1B to Spanish via the Qwen2 tokenizer.
+
+\subsection{Why TokAlign as a Case Study?}
+
+TokAlign is an ideal subject for this analysis because:
+\begin{enumerate}
+    \item \textbf{Recent and visible}: Published at ACL 2025, representing state-of-the-art in token alignment
+    \item \textbf{Significant vocabulary change}: Expansion from 50K to 152K tokens (3$\times$ increase)
+    \item \textbf{Clear efficiency claims}: Authors claim improved compression and faster inference via fertility reduction
+    \item \textbf{Reproducible setup}: Open-source implementation with documented methodology
+\end{enumerate}
+
+This makes TokAlign a strong test case for demonstrating when traditional metrics fail to capture the full picture.
+
+\subsection{Experimental Setup}
+
+\begin{table}[h]
+\centering
+\caption{Model Configurations}
+\label{tab:models}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Configuration} & \textbf{Baseline} & \textbf{Adapted} \\
+\midrule
+Base Model & Pythia-1B & Pythia-1B \\
+Tokenizer & GPT-2 (50,257 tokens) & Qwen2 (151,643 tokens) \\
+Parameters & 1.01B & 1.43B \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Translation Quality Results}
+
+\begin{table}[h]
+\centering
+\caption{Machine Translation Results (Spanish $\rightarrow$ English, OPUS-100)}
+\label{tab:mt_results}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Metric} & \textbf{Baseline} & \textbf{Adapted} & \textbf{$\Delta$} & \textbf{Direction} \\
+\midrule
+BLEU & 16.25 & 14.30 & $-12.0\%$ & \textcolor{red}{$\downarrow$} \\
+chrF++ & 33.31 & 37.70 & $+13.2\%$ & \textcolor{green}{$\uparrow$} \\
+\midrule
+\textbf{chrF-$\Delta$} & 17.06 & 23.40 & $+6.34$ & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key Observation}: BLEU and chrF++ \textit{disagree} on whether adaptation improved quality. chrF-$\Delta$ increases by 6.34 points, indicating BLEU is penalizing tokenization changes rather than quality degradation.
+
+\subsection{Efficiency Results}
+
+\begin{table}[h]
+\centering
+\caption{Computational Efficiency Metrics}
+\label{tab:efficiency}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Metric} & \textbf{Baseline} & \textbf{Adapted} & \textbf{$\Delta$} \\
+\midrule
+Fertility (tokens/word) & 2.059 & 1.874 & $-9.0\%$ \\
+Throughput (tokens/sec) & 619.77 & 496.22 & $-19.9\%$ \\
+Peak VRAM (MB) & 2,314 & 3,108 & $+34.3\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{chrF-E Analysis}
+
+\begin{equation}
+    \text{chrF-E}_{\text{adapted}} = 37.70 \times \frac{496.22}{619.77} = 30.20
+\end{equation}
+
+\begin{table}[h]
+\centering
+\caption{Efficiency-Weighted Quality Comparison}
+\label{tab:chrf_e}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Metric} & \textbf{Baseline} & \textbf{Adapted} & \textbf{$\Delta$} \\
+\midrule
+chrF++ (raw) & 33.31 & 37.70 & $+13.2\%$ \\
+\textbf{chrF-E} & 33.31 & 30.20 & $\mathbf{-9.3\%}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{The Fertility Trap}: Despite a 13\% chrF++ improvement, the efficiency-adjusted quality (chrF-E) \textit{decreases} by 9.3\%. The vocabulary expansion (50K $\rightarrow$ 152K tokens) improves fertility but the computational overhead negates the quality gains.
+
+%==============================================================================
+\section{Experimental Design}
+
+We conduct a focused case study of TokAlign \citep{li2025tokalign}, analyzing how our proposed metrics reveal evaluation dynamics that traditional metrics miss.
+
+\subsection{Experiment 1: Metric Disagreement Analysis}
+
+\textbf{Goal}: Quantify the disagreement between BLEU and chrF++ before and after vocabulary adaptation.
+
+\textbf{Method}: 
+\begin{itemize}
+    \item Compute BLEU and chrF++ on identical translation outputs
+    \item Calculate chrF-$\Delta$ for baseline and adapted models
+    \item Analyze $\Delta$chrF-$\Delta$ to measure tokenization-induced bias
+\end{itemize}
+
+\textbf{Hypothesis}: Vocabulary expansion causes BLEU to underestimate quality improvements that chrF++ correctly captures.
+
+\subsection{Experiment 2: Efficiency-Quality Tradeoff Analysis}
+
+\textbf{Goal}: Demonstrate the ``Fertility Trap''---where fertility improvements do not translate to efficiency gains.
+
+\textbf{Method}:
+\begin{itemize}
+    \item Measure throughput (tokens/sec) and latency (TTFT) for both models
+    \item Compute chrF-E to obtain efficiency-adjusted quality
+    \item Compare chrF++ improvement vs. chrF-E improvement
+\end{itemize}
+
+\textbf{Hypothesis}: Despite improved fertility, chrF-E will show degradation due to vocabulary expansion costs.
+
+\subsection{Experiment 3: Breakdown Analysis}
+
+\textbf{Goal}: Identify which components of vocabulary adaptation affect evaluation metrics.
+
+\textbf{Analysis Dimensions}:
+\begin{itemize}
+    \item Vocabulary size impact: 50K $\rightarrow$ 152K tokens
+    \item Parameter count impact: 1.01B $\rightarrow$ 1.43B
+    \item Output length changes: brevity penalty effects
+    \item Character-level quality: morpheme preservation
+\end{itemize}
+
+\subsection{Experiment 4: Sensitivity Analysis}
+
+\textbf{Goal}: Test metric robustness across different evaluation conditions.
+
+\textbf{Conditions}:
+\begin{itemize}
+    \item Different test set sizes (100, 500, 1000 samples)
+    \item Different decoding strategies (greedy, beam search, nucleus)
+    \item Different chrF++ parameters ($\beta$ values)
+\end{itemize}
+
+%==============================================================================
+\section{Expected Contributions}
+
+\begin{enumerate}
+    \item \textbf{chrF-$\Delta$ Metric}: A diagnostic tool for identifying tokenization-induced evaluation bias. We provide formal definition, interpretation guidelines, and demonstrate its utility on TokAlign.
+    
+    \item \textbf{chrF-E Metric}: The first efficiency-weighted translation quality metric. We show how it reveals the ``Fertility Trap'' where improved tokenization efficiency does not translate to improved computational efficiency.
+    
+    \item \textbf{Empirical Case Study}: Detailed analysis of TokAlign showing that BLEU underestimates quality improvements by 25 percentage points compared to chrF++ (reporting $-12\%$ vs. $+13\%$), and that efficiency-adjusted quality actually decreases despite fertility gains.
+    
+    \item \textbf{Evaluation Recommendations}: Practical guidelines for vocabulary adaptation researchers to use chrF-based metrics alongside traditional metrics for more complete evaluation.
+\end{enumerate}
+
+\subsection{Scope and Limitations}
+
+This work focuses on TokAlign as a representative case study. While we believe our findings generalize to other vocabulary adaptation methods (particularly those involving vocabulary expansion), we leave multi-method validation to future work. Our goal is to introduce and validate the metrics on a concrete, well-controlled example rather than claim universal applicability.
+
+%==============================================================================
+\section{Timeline}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Phase} & \textbf{Duration} \\
+\midrule
+Literature review \& metric formalization & 1 week \\
+Metric disagreement analysis (Exp 1) & 3 days \\
+Efficiency-quality tradeoff analysis (Exp 2) & 3 days \\
+Breakdown \& sensitivity analysis (Exp 3-4) & 1 week \\
+Additional TokAlign experiments (if needed) & 1 week \\
+Writing \& revision & 1.5 weeks \\
+\midrule
+\textbf{Total} & \textbf{5-6 weeks} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Note}: Much of the experimental infrastructure and data already exists from prior TokAlign evaluation work. The timeline assumes leveraging these existing resources.
+
+%==============================================================================
+\section{Target Venues}
+
+\begin{itemize}
+    \item \textbf{Primary}: WMT 2025 Metrics Shared Task
+    \item \textbf{Alternative}: Eval4NLP Workshop (EMNLP 2025)
+    \item \textbf{Backup}: Insights from Negative Results in NLP (ACL 2025)
+\end{itemize}
+
+%==============================================================================
+\section{Related Work}
+
+\subsection{MT Evaluation Metrics}
+
+Recent work has explored combining lexical and neural metrics \citep{glushkova2023bleu}, extending chrF with semantics (chrF-S; \citealp{mukherjee2024chrfs}), and developing reference-free evaluation \citep{iida2024cater}. Our work complements these by focusing specifically on the vocabulary adaptation setting, where tokenization differences between compared systems create unique evaluation challenges.
+
+\subsection{TokAlign and Vocabulary Adaptation}
+
+TokAlign \citep{li2025tokalign} represents a recent advance in vocabulary adaptation, learning token alignments between source and target vocabularies to enable efficient cross-lingual transfer. The method claims to ``significantly improve multilingual text compression rates'' and reduce perplexity. However, the original evaluation relies primarily on:
+\begin{itemize}
+    \item Perplexity (which is tokenization-dependent)
+    \item Downstream task accuracy (coarse-grained)
+    \item Fertility metrics (which don't capture computational cost)
+\end{itemize}
+
+Our work provides a more nuanced evaluation of TokAlign using tokenization-agnostic and efficiency-aware metrics.
+
+\subsection{The Evaluation Gap}
+
+Prior vocabulary adaptation work \citep{rust2021good, minixhofer2022wechsel} assumes that improved fertility translates to improved efficiency. We challenge this assumption by showing that for smaller models, vocabulary expansion costs can dominate sequence length savings---a phenomenon we term the ``Fertility Trap.''
+
+%==============================================================================
+\bibliographystyle{plainnat}
+\begin{thebibliography}{99}
+
+\bibitem[Glushkova et al.(2023)]{glushkova2023bleu}
+Glushkova, T., Zerva, C., and Martins, A.F.T. (2023).
+\newblock BLEU Meets COMET: Combining Lexical and Neural Metrics Towards Robust Machine Translation Evaluation.
+\newblock In \textit{EAMT}.
+
+\bibitem[Iida and Mimura(2024)]{iida2024cater}
+Iida, K. and Mimura, K. (2024).
+\newblock CATER: Leveraging LLM to Pioneer a Multidimensional, Reference-Independent Paradigm in Translation Quality Evaluation.
+\newblock \textit{arXiv:2412.11261}.
+
+\bibitem[Li et al.(2025)]{li2025tokalign}
+Li, C., Zhang, J., and Zong, C. (2025).
+\newblock TokAlign: Efficient Vocabulary Adaptation via Token Alignment.
+\newblock In \textit{ACL}.
+
+\bibitem[Minixhofer et al.(2022)]{minixhofer2022wechsel}
+Minixhofer, B., Paischer, F., and Rekabsaz, N. (2022).
+\newblock WECHSEL: Effective initialization of subword embeddings for cross-lingual transfer of monolingual language models.
+\newblock In \textit{NAACL}.
+
+\bibitem[Minixhofer et al.(2024)]{minixhofer2024zett}
+Minixhofer, B., Ponti, E., and Vuli\'c, I. (2024).
+\newblock Zero-Shot Tokenizer Transfer.
+\newblock In \textit{NeurIPS}.
+
+\bibitem[Mukherjee and Shrivastava(2024)]{mukherjee2024chrfs}
+Mukherjee, A. and Shrivastava, M. (2024).
+\newblock chrF-S: Semantics Is All You Need.
+\newblock In \textit{WMT}.
+
+\bibitem[Papineni et al.(2002)]{papineni2002bleu}
+Papineni, K., Roukos, S., Ward, T., and Zhu, W.J. (2002).
+\newblock BLEU: a method for automatic evaluation of machine translation.
+\newblock In \textit{ACL}.
+
+\bibitem[Popovi\'c(2015)]{popovic2015chrf}
+Popovi\'c, M. (2015).
+\newblock chrF: character n-gram F-score for automatic MT evaluation.
+\newblock In \textit{WMT}.
+
+\bibitem[Rust et al.(2021)]{rust2021good}
+Rust, P., Pfeiffer, J., Vuli\'c, I., Ruder, S., and Gurevych, I. (2021).
+\newblock How Good is Your Tokenizer? On the Monolingual Performance of Multilingual Language Models.
+\newblock In \textit{ACL}.
+
+\bibitem[Ushio et al.(2023)]{ushio2023vocabulary}
+Ushio, A., Zhou, Y., and Camacho-Collados, J. (2023).
+\newblock An Efficient Multilingual Language Model Compression through Vocabulary Trimming.
+\newblock In \textit{EMNLP}.
+
+\bibitem[Wang et al.(2020)]{wang2020extending}
+Wang, C., Cho, K., and Gu, J. (2020).
+\newblock Neural Machine Translation with Byte-Level Subwords.
+\newblock In \textit{AAAI}.
+
+\end{thebibliography}
+
+\end{document}
+

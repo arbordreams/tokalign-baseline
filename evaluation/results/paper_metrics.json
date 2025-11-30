@@ -1,0 +1,22 @@
+{
+  "chrf_delta": {
+    "baseline": 17.060000000000002,
+    "adapted": 23.400000000000002,
+    "delta": 6.34
+  },
+  "chrf_e": {
+    "baseline": 33.31,
+    "adapted": 30.184574922955296,
+    "change_percent": -9.382843221389091
+  },
+  "comet": {
+    "baseline": 0.7301282682123461,
+    "adapted": 0.660166142427403
+  },
+  "fertility_trap": {
+    "chrf_improved_percent": 13.179225457820475,
+    "throughput_change_percent": -19.934814527970047,
+    "chrf_e_change_percent": -9.382843221389091,
+    "trap_detected": true
+  }
+}

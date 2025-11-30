@@ -1,0 +1,116 @@
+[NbConvertApp] Converting notebook eval_adapted.ipynb to notebook
+2025-11-29 00:36:12.376225: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2025-11-29 00:36:12.390682: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1764376572.408106   64407 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1764376572.413661   64407 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1764376572.427270   64407 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1764376572.427286   64407 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1764376572.427288   64407 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1764376572.427289   64407 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2025-11-29 00:36:12.431878: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX512F AVX512_VNNI AVX512_BF16 AVX512_FP16 AVX_VNNI, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+Traceback (most recent call last):
+  File "/home/ubuntu/.local/bin/jupyter-nbconvert", line 8, in <module>
+    sys.exit(main())
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/jupyter_core/application.py", line 284, in launch_instance
+    super().launch_instance(argv=argv, **kwargs)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/traitlets/config/application.py", line 1075, in launch_instance
+    app.start()
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/nbconvertapp.py", line 420, in start
+    self.convert_notebooks()
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/nbconvertapp.py", line 597, in convert_notebooks
+    self.convert_single_notebook(notebook_filename)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/nbconvertapp.py", line 563, in convert_single_notebook
+    output, resources = self.export_single_notebook(
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/nbconvertapp.py", line 487, in export_single_notebook
+    output, resources = self.exporter.from_filename(
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/exporters/exporter.py", line 201, in from_filename
+    return self.from_file(f, resources=resources, **kw)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/exporters/exporter.py", line 220, in from_file
+    return self.from_notebook_node(
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/exporters/notebook.py", line 36, in from_notebook_node
+    nb_copy, resources = super().from_notebook_node(nb, resources, **kw)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/exporters/exporter.py", line 154, in from_notebook_node
+    nb_copy, resources = self._preprocess(nb_copy, resources)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/exporters/exporter.py", line 353, in _preprocess
+    nbc, resc = preprocessor(nbc, resc)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/preprocessors/base.py", line 48, in __call__
+    return self.preprocess(nb, resources)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/preprocessors/execute.py", line 103, in preprocess
+    self.preprocess_cell(cell, resources, index)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbconvert/preprocessors/execute.py", line 124, in preprocess_cell
+    cell = self.execute_cell(cell, index, store_history=True)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/jupyter_core/utils/__init__.py", line 165, in wrapped
+    return loop.run_until_complete(inner)
+  File "/usr/lib/python3.10/asyncio/base_events.py", line 649, in run_until_complete
+    return future.result()
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbclient/client.py", line 1062, in async_execute_cell
+    await self._check_raise_for_error(cell, cell_index, exec_reply)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/nbclient/client.py", line 918, in _check_raise_for_error
+    raise CellExecutionError.from_cell_and_msg(cell, exec_reply_content)
+nbclient.exceptions.CellExecutionError: An error occurred while executing the following cell:
+------------------
+# Cell 14: Compute MT Metrics
+# ============================
+
+from sacrebleu import corpus_bleu, corpus_chrf, corpus_ter
+
+print("\nComputing MT metrics...")
+
+# BLEU (with signature for reproducibility)
+bleu_result = corpus_bleu(hypotheses, [english_references])
+bleu_score = bleu_result.score
+bleu_signature = bleu_result.get_signature()
+
+# chrF++ (word_order=2 for chrF++)
+chrf_result = corpus_chrf(hypotheses, [english_references], word_order=2)
+chrf_score = chrf_result.score
+
+# TER
+ter_result = corpus_ter(hypotheses, [english_references])
+ter_score = ter_result.score
+
+print(f"\n--- MT Metrics ---")
+print(f"BLEU:   {bleu_score:.2f}")
+print(f"chrF++: {chrf_score:.2f}")
+print(f"TER:    {ter_score:.2f}")
+print(f"\nBLEU signature: {bleu_signature}")
+
+# Try COMET if available
+try:
+    from comet import download_model, load_from_checkpoint
+    
+    print("\nComputing COMET score...")
+    comet_model_path = download_model("Unbabel/wmt22-comet-da")
+    comet_model = load_from_checkpoint(comet_model_path)
+    
+    comet_data = [
+        {"src": src, "mt": hyp, "ref": ref}
+        for src, hyp, ref in zip(spanish_sources, hypotheses, english_references)
+    ]
+    comet_output = comet_model.predict(comet_data, batch_size=8, gpus=1)
+    comet_score = comet_output.system_score
+    print(f"COMET:  {comet_score:.4f}")
+except Exception as e:
+    print(f"COMET not available: {e}")
+    comet_score = None
+
+------------------
+
+----- stdout -----
+
+Computing MT metrics...
+------------------
+
+[0;31m---------------------------------------------------------------------------[0m
+[0;31mAttributeError[0m                            Traceback (most recent call last)
+[0;32m/tmp/ipykernel_64407/1661465536.py[0m in [0;36m<module>[0;34m[0m
+[1;32m      9[0m [0mbleu_result[0m [0;34m=[0m [0mcorpus_bleu[0m[0;34m([0m[0mhypotheses[0m[0;34m,[0m [0;34m[[0m[0menglish_references[0m[0;34m][0m[0;34m)[0m[0;34m[0m[0;34m[0m[0m
+[1;32m     10[0m [0mbleu_score[0m [0;34m=[0m [0mbleu_result[0m[0;34m.[0m[0mscore[0m[0;34m[0m[0;34m[0m[0m
+[0;32m---> 11[0;31m [0mbleu_signature[0m [0;34m=[0m [0mbleu_result[0m[0;34m.[0m[0mget_signature[0m[0;34m([0m[0;34m)[0m[0;34m[0m[0;34m[0m[0m
+[0m[1;32m     12[0m [0;34m[0m[0m
+[1;32m     13[0m [0;31m# chrF++ (word_order=2 for chrF++)[0m[0;34m[0m[0;34m[0m[0m
+
+[0;31mAttributeError[0m: 'BLEUScore' object has no attribute 'get_signature'
+
